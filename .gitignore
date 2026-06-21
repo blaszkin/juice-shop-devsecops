@@ -68,6 +68,9 @@ config/*.yml
 # System Files
 .DS_Store
 
+# Sekrety przeniesione poza repozytorium (Secrets Scan fix)
+ctf.key
+
 # Artefakty pipeline DevSecOps (CI)
 image.tar
 *.sarif

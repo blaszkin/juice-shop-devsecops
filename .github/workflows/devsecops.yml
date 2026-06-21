@@ -131,30 +131,19 @@ jobs:
       - uses: actions/download-artifact@v4
         with:
           name: docker-image
-      - name: Wczytaj obraz
-        run: docker load -i image.tar
-      - name: Trivy (tabela, HIGH,CRITICAL)
-        uses: aquasecurity/trivy-action@0.28.0
-        with:
-          image-ref: app:ci
-          format: table
-          severity: HIGH,CRITICAL
-          ignore-unfixed: false
-          output: trivy-report.txt
-          exit-code: "0"
-      - name: Trivy (SARIF)
-        uses: aquasecurity/trivy-action@0.28.0
-        with:
-          image-ref: app:ci
-          format: sarif
-          severity: HIGH,CRITICAL
-          output: trivy.sarif
-          exit-code: "0"
-      - name: Podsumowanie
+      - name: Trivy — skan obrazu z artefaktu (HIGH,CRITICAL)
         run: |
+          docker run --rm -v "${{ github.workspace }}:/work" \
+            aquasec/trivy:latest image --input /work/image.tar \
+            --severity HIGH,CRITICAL --scanners vuln --no-progress \
+            --format table --output /work/trivy-report.txt
+          docker run --rm -v "${{ github.workspace }}:/work" \
+            aquasec/trivy:latest image --input /work/image.tar \
+            --severity HIGH,CRITICAL --scanners vuln --no-progress \
+            --format sarif --output /work/trivy.sarif || true
           echo "## Trivy — skan obrazu (HIGH,CRITICAL)" >> "$GITHUB_STEP_SUMMARY"
           echo '```' >> "$GITHUB_STEP_SUMMARY"
-          head -n 40 trivy-report.txt >> "$GITHUB_STEP_SUMMARY" || true
+          tail -n 50 trivy-report.txt >> "$GITHUB_STEP_SUMMARY" || true
           echo '```' >> "$GITHUB_STEP_SUMMARY"
       - uses: actions/upload-artifact@v4
         with:
@@ -178,9 +167,12 @@ jobs:
       - name: Wczytaj obraz
         run: docker load -i image.tar
       - name: Tymczasowy deployment aplikacji (kontener)
+        env:
+          JWT_PRIVATE_KEY: ${{ secrets.JWT_PRIVATE_KEY }}
+          HMAC_SECRET: ${{ secrets.HMAC_SECRET }}
         run: |
           docker network create zapnet
-          docker run -d --name juice --network zapnet -p 3000:3000 app:ci
+          docker run -d --name juice --network zapnet -p 3000:3000 -e JWT_PRIVATE_KEY -e HMAC_SECRET app:ci
           echo "Czekam na gotowość aplikacji..."
           for i in $(seq 1 50); do
             if curl -sf http://localhost:3000/rest/admin/application-version >/dev/null 2>&1; then
@@ -192,7 +184,7 @@ jobs:
         run: |
           docker run --rm --network zapnet -v "${{ github.workspace }}:/zap/wrk:rw" \
             ghcr.io/zaproxy/zaproxy:stable zap-baseline.py \
-            -t http://juice:3000 -r zap-report.html -J zap-report.json -a -I || true
+            -t http://juice:3000 -r /zap/wrk/zap-report.html -J /zap/wrk/zap-report.json -a -I || true
           echo "## DAST — OWASP ZAP Baseline" >> "$GITHUB_STEP_SUMMARY"
           node -e "try{const r=require('./zap-report.json');const al=r.site[0].alerts;const cnt={};al.forEach(a=>{cnt[a.riskdesc.split(' ')[0]]=(cnt[a.riskdesc.split(' ')[0]]||0)+1});console.log('Alerty wg ryzyka: '+JSON.stringify(cnt))}catch(e){console.log('raport zapisany')}" >> "$GITHUB_STEP_SUMMARY" || true
       - name: Logi aplikacji (diagnostyka)

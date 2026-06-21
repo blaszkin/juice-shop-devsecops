@@ -187,6 +187,22 @@ function configureApp (app: ReturnType<typeof express>, seq: typeof sequelize) {
   app.use(helmet.frameguard())
   // app.use(helmet.xssFilter()); // = no protection from persisted XSS via RESTful API
   app.disable('x-powered-by')
+  // FIX (DAST): brakujące nagłówki bezpieczeństwa wykrywane przez OWASP ZAP
+  app.use(helmet.hsts({ maxAge: 15552000, includeSubDomains: true })) // Strict-Transport-Security
+  app.use(helmet.referrerPolicy({ policy: 'no-referrer' })) // Referrer-Policy
+  app.use(helmet.contentSecurityPolicy({
+    useDefaults: false,
+    directives: {
+      defaultSrc: ["'self'"],
+      scriptSrc: ["'self'", "'unsafe-inline'", "'unsafe-eval'"],
+      styleSrc: ["'self'", "'unsafe-inline'", 'https:'],
+      imgSrc: ["'self'", 'data:', 'https:'],
+      connectSrc: ["'self'", 'https:', 'wss:'],
+      fontSrc: ["'self'", 'https:', 'data:'],
+      frameSrc: ["'self'"],
+      objectSrc: ["'none'"]
+    }
+  })) // Content-Security-Policy
   app.use(featurePolicy({
     features: {
       payment: ["'self'"]

@@ -47,6 +47,20 @@ W `server.ts` dodano brakujące nagłówki bezpieczeństwa wykrywane przez ZAP:
 | `Strict-Transport-Security` | *HSTS Header Not Set* | `helmet.hsts(...)` |
 | `Referrer-Policy` | *Referrer-Policy Header Not Set* | `helmet.referrerPolicy(...)` |
 
+Powyższe to skan **pasywny** (ZAP Baseline — klasa Low/Medium). DAST uzupełniono o skan
+**aktywny** (`ci/dast-sqli-probe.sh`), który dynamicznie wstrzykuje ładunki ataków do
+działającej aplikacji i wykrywa podatności klasy **High** (SQL Injection), niewidoczne dla
+skanu pasywnego:
+
+| Podatność (High) | Punkt wejścia | Przed → po | Naprawa |
+|------------------|---------------|------------|---------|
+| **SQL Injection** (UNION) | `/rest/products/search?q=` | wyciek 20 kont z tabeli `Users` → 0 rekordów | zapytanie sparametryzowane (`:q`) |
+| **Obejście logowania** (SQL Injection) | `/rest/user/login` | logowanie jako admin bez hasła (`' OR 1=1--`) → HTTP 401 | zapytanie sparametryzowane (`:email`/`:password`) |
+
+Test działa w pipeline na obrazie **stock** (przed naprawą) i obrazie **z pipeline** (po
+naprawie); dla obrazu naprawionego pełni rolę **bramki bezpieczeństwa** — regresja SQL
+Injection kończy etap DAST błędem.
+
 ## Trivy — skan obrazu kontenera
 
 Skan obrazu (HIGH,CRITICAL) wykonywany jest **przed** publikacją do rejestru. Liczba

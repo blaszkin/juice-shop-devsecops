@@ -179,6 +179,15 @@ jobs:
             sleep 4
           done
           curl -s http://localhost:3000/rest/admin/application-version || true
+      - name: Deploy obrazu PRZED naprawą (stock) do porównania DAST
+        run: |
+          docker run -d --name juice-stock -p 3001:3000 bkimminich/juice-shop:v20.0.0
+          echo "Czekam na gotowość obrazu stock (PRZED naprawą)..."
+          for i in $(seq 1 50); do
+            if curl -sf http://localhost:3001/rest/admin/application-version >/dev/null 2>&1; then
+              echo "Stock gotowy (próba $i)"; break; fi
+            sleep 4
+          done
       - name: OWASP ZAP Baseline Scan
         run: |
           sudo chmod -R 777 "${{ github.workspace }}"
@@ -187,6 +196,18 @@ jobs:
             -t http://127.0.0.1:3000 -r /zap/wrk/zap-report.html -J /zap/wrk/zap-report.json -a -I || true
           echo "## DAST — OWASP ZAP Baseline" >> "$GITHUB_STEP_SUMMARY"
           node -e "try{const r=require('./zap-report.json');const al=r.site[0].alerts;const cnt={};al.forEach(a=>{cnt[a.riskdesc.split(' ')[0]]=(cnt[a.riskdesc.split(' ')[0]]||0)+1});console.log('Alerty wg ryzyka: '+JSON.stringify(cnt))}catch(e){console.log('raport zapisany')}" >> "$GITHUB_STEP_SUMMARY" || true
+      - name: Aktywny test wstrzyknięć SQL (active DAST — bramka bezpieczeństwa)
+        run: |
+          chmod +x ci/dast-sqli-probe.sh
+          {
+            echo "## DAST — aktywny test wstrzyknięć SQL (Shift-Left gate)"
+            echo "Skan aktywny wstrzykuje ładunki SQLi do działającej aplikacji — wykrywa klasę **High** (SQL Injection), niewidoczną dla skanu pasywnego."
+          } >> "$GITHUB_STEP_SUMMARY"
+          # Obraz PRZED naprawą (stock) — oczekiwane: PODATNE (potwierdza, że test rzeczywiście wykrywa SQLi)
+          bash ci/dast-sqli-probe.sh http://localhost:3001 "PRZED naprawą (stock OWASP Juice Shop)" >> "$GITHUB_STEP_SUMMARY" \
+            || echo "_(obraz stock podatny — zgodnie z oczekiwaniem)_" >> "$GITHUB_STEP_SUMMARY"
+          # Obraz PO naprawie (zbudowany w pipeline) — BRAMKA: musi być ODPORNY, inaczej krok kończy się błędem
+          bash ci/dast-sqli-probe.sh http://localhost:3000 "PO naprawie (obraz zbudowany w pipeline)" >> "$GITHUB_STEP_SUMMARY"
       - name: Logi aplikacji (diagnostyka)
         if: always()
         run: docker logs juice 2>&1 | tail -30 || true

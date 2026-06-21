@@ -12,11 +12,10 @@ przechodnich (bez psucia działania aplikacji).
 | Pakiet | Było | Jest | Podatność |
 |--------|------|------|-----------|
 | `crypto-js` | < 4.2.0 | ^4.2.0 | **CRITICAL** — PBKDF2 ~1,3 mln× słabszy od standardu |
-| `minimatch` | <= 3.1.3 | ^10.0.1 | HIGH — ReDoS |
-| `http-cache-semantics` | < 4.1.1 | ^4.1.1 | HIGH — ReDoS (request) |
+| `http-cache-semantics` | < 4.1.1 | ^4.1.1 | HIGH — ReDoS (HTTP request) |
 | `moment` | podatne | ^2.30.1 | HIGH — ReDoS / path traversal |
 
-**Wynik (root):** High **25 → 18**, Critical **5 → 3** (4 naprawione znaleziska H/C).
+**Wynik (root):** High **25 → 21**, Critical **5 → 3** (naprawione: 1 Critical + 2 High; pozostałe to celowe podatności Juice Shop bez dostępnej łatki).
 
 ## SAST — Semgrep (kod źródłowy)
 

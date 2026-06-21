@@ -171,8 +171,7 @@ jobs:
           JWT_PRIVATE_KEY: ${{ secrets.JWT_PRIVATE_KEY }}
           HMAC_SECRET: ${{ secrets.HMAC_SECRET }}
         run: |
-          docker network create zapnet
-          docker run -d --name juice --network zapnet -p 3000:3000 -e JWT_PRIVATE_KEY -e HMAC_SECRET app:ci
+          docker run -d --name juice -p 3000:3000 -e JWT_PRIVATE_KEY -e HMAC_SECRET app:ci
           echo "Czekam na gotowość aplikacji..."
           for i in $(seq 1 50); do
             if curl -sf http://localhost:3000/rest/admin/application-version >/dev/null 2>&1; then
@@ -182,9 +181,10 @@ jobs:
           curl -s http://localhost:3000/rest/admin/application-version || true
       - name: OWASP ZAP Baseline Scan
         run: |
-          docker run --rm --network zapnet -v "${{ github.workspace }}:/zap/wrk:rw" \
+          sudo chmod -R 777 "${{ github.workspace }}"
+          docker run --rm --network host -v "${{ github.workspace }}:/zap/wrk:rw" \
             ghcr.io/zaproxy/zaproxy:stable zap-baseline.py \
-            -t http://juice:3000 -r /zap/wrk/zap-report.html -J /zap/wrk/zap-report.json -a -I || true
+            -t http://127.0.0.1:3000 -r /zap/wrk/zap-report.html -J /zap/wrk/zap-report.json -a -I || true
           echo "## DAST — OWASP ZAP Baseline" >> "$GITHUB_STEP_SUMMARY"
           node -e "try{const r=require('./zap-report.json');const al=r.site[0].alerts;const cnt={};al.forEach(a=>{cnt[a.riskdesc.split(' ')[0]]=(cnt[a.riskdesc.split(' ')[0]]||0)+1});console.log('Alerty wg ryzyka: '+JSON.stringify(cnt))}catch(e){console.log('raport zapisany')}" >> "$GITHUB_STEP_SUMMARY" || true
       - name: Logi aplikacji (diagnostyka)

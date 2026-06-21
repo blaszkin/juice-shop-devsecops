@@ -161,6 +161,7 @@ jobs:
     runs-on: ubuntu-latest
     needs: build
     steps:
+      - uses: actions/checkout@v4   # potrzebny skrypt ci/dast-sqli-probe.sh
       - uses: actions/download-artifact@v4
         with:
           name: docker-image

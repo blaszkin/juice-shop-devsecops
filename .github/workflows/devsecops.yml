@@ -1,0 +1,236 @@
+name: DevSecOps Pipeline
+
+# Pipeline CI/CD realizujący zasady DevSecOps (Shift-Left Security) dla
+# podatnej aplikacji webowej OWASP Juice Shop:
+#   Etap 1  - budowanie aplikacji i obrazu Docker
+#   Etap 2  - testy bezpieczeństwa: SCA, SAST, Secrets, DAST
+#   Etap 3  - skan obrazu kontenera (Trivy) PRZED publikacją
+#   Etap 4  - push obrazu do publicznego rejestru kontenerów (ghcr.io)
+
+on:
+  push:
+    branches: [ "main" ]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+  packages: write
+  security-events: write
+
+env:
+  IMAGE: ghcr.io/${{ github.repository_owner }}/juice-shop-devsecops
+
+jobs:
+  # ======================================================================
+  # ETAP 2a — SCA: skan bibliotek i zależności (npm audit)
+  # ======================================================================
+  sca:
+    name: "Etap 2a — SCA (npm audit)"
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "22"
+      - name: Wygeneruj lockfile (bez budowania)
+        run: npm install --package-lock-only --ignore-scripts --no-fund --no-audit
+      - name: npm audit (High/Critical)
+        run: |
+          echo "## SCA — npm audit (High/Critical)" >> "$GITHUB_STEP_SUMMARY"
+          npm audit --audit-level=high || true
+          npm audit --json > npm-audit.json || true
+          node -e "const a=require('./npm-audit.json');const m=a.metadata.vulnerabilities;console.log('| poziom | liczba |\n|---|---|\n| critical | '+m.critical+' |\n| high | '+m.high+' |\n| moderate | '+m.moderate+' |')" >> "$GITHUB_STEP_SUMMARY" || true
+      - uses: actions/upload-artifact@v4
+        with:
+          name: sca-npm-audit
+          path: npm-audit.json
+
+  # ======================================================================
+  # ETAP 2b — SAST: statyczna analiza kodu źródłowego (Semgrep)
+  # ======================================================================
+  sast:
+    name: "Etap 2b — SAST (Semgrep)"
+    runs-on: ubuntu-latest
+    container:
+      image: semgrep/semgrep:latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Semgrep (OWASP Top Ten + JS/TS)
+        run: |
+          semgrep --config p/owasp-top-ten --config p/javascript --config p/typescript \
+                  --config p/secrets --metrics off --sarif --output semgrep.sarif \
+                  --exclude frontend/dist --exclude node_modules . || true
+          semgrep --config p/owasp-top-ten --config p/javascript --config p/typescript \
+                  --config p/secrets --metrics off --json --output semgrep.json \
+                  --exclude frontend/dist --exclude node_modules . || true
+          echo "## SAST — Semgrep" >> "$GITHUB_STEP_SUMMARY"
+          node -e "const r=require('./semgrep.json');const n=r.results.length;const err=r.results.filter(x=>x.extra.severity==='ERROR').length;console.log('Znaleziska: '+n+' (w tym ERROR/High: '+err+')')" >> "$GITHUB_STEP_SUMMARY" || true
+      - uses: actions/upload-artifact@v4
+        with:
+          name: sast-semgrep
+          path: |
+            semgrep.sarif
+            semgrep.json
+      - name: Wyślij SARIF do GitHub Code Scanning
+        uses: github/codeql-action/upload-sarif@v3
+        with:
+          sarif_file: semgrep.sarif
+        continue-on-error: true
+
+  # ======================================================================
+  # ETAP 2c — Secrets Scan: wykrywanie sekretów (Gitleaks)
+  # ======================================================================
+  secrets:
+    name: "Etap 2c — Secrets (Gitleaks)"
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+      - name: Gitleaks (skan plików)
+        run: |
+          docker run --rm -v "${{ github.workspace }}:/repo" \
+            ghcr.io/gitleaks/gitleaks:latest dir /repo \
+            --report-format sarif --report-path /repo/gitleaks.sarif --redact -v || true
+          echo "## Secrets — Gitleaks" >> "$GITHUB_STEP_SUMMARY"
+          node -e "try{const r=require('./gitleaks.sarif');const n=r.runs[0].results.length;console.log('Wykryte sekrety: '+n)}catch(e){console.log('raport zapisany')}" >> "$GITHUB_STEP_SUMMARY" || true
+      - uses: actions/upload-artifact@v4
+        with:
+          name: secrets-gitleaks
+          path: gitleaks.sarif
+
+  # ======================================================================
+  # ETAP 1 — Budowanie obrazu Docker (raz, współdzielony dalej)
+  # ======================================================================
+  build:
+    name: "Etap 1 — Build obrazu Docker"
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: docker build
+        run: |
+          docker build -t app:ci \
+            --build-arg BUILD_DATE=$(date -u +%Y-%m-%dT%H:%M:%SZ) \
+            --build-arg VCS_REF=${{ github.sha }} .
+      - name: Zapisz obraz jako artefakt
+        run: docker save app:ci -o image.tar
+      - uses: actions/upload-artifact@v4
+        with:
+          name: docker-image
+          path: image.tar
+          retention-days: 1
+
+  # ======================================================================
+  # ETAP 3 — Skan obrazu kontenera Trivy (PRZED wypchnięciem)
+  # ======================================================================
+  trivy:
+    name: "Etap 3 — Skan obrazu (Trivy)"
+    runs-on: ubuntu-latest
+    needs: build
+    steps:
+      - uses: actions/download-artifact@v4
+        with:
+          name: docker-image
+      - name: Wczytaj obraz
+        run: docker load -i image.tar
+      - name: Trivy (tabela, HIGH,CRITICAL)
+        uses: aquasecurity/trivy-action@0.28.0
+        with:
+          image-ref: app:ci
+          format: table
+          severity: HIGH,CRITICAL
+          ignore-unfixed: false
+          output: trivy-report.txt
+          exit-code: "0"
+      - name: Trivy (SARIF)
+        uses: aquasecurity/trivy-action@0.28.0
+        with:
+          image-ref: app:ci
+          format: sarif
+          severity: HIGH,CRITICAL
+          output: trivy.sarif
+          exit-code: "0"
+      - name: Podsumowanie
+        run: |
+          echo "## Trivy — skan obrazu (HIGH,CRITICAL)" >> "$GITHUB_STEP_SUMMARY"
+          echo '```' >> "$GITHUB_STEP_SUMMARY"
+          head -n 40 trivy-report.txt >> "$GITHUB_STEP_SUMMARY" || true
+          echo '```' >> "$GITHUB_STEP_SUMMARY"
+      - uses: actions/upload-artifact@v4
+        with:
+          name: trivy
+          path: |
+            trivy-report.txt
+            trivy.sarif
+
+  # ======================================================================
+  # ETAP 2d — DAST: dynamiczny skan działającej aplikacji (OWASP ZAP)
+  #           tymczasowy deployment w CI (kontenery w sieci Dockera)
+  # ======================================================================
+  dast:
+    name: "Etap 2d — DAST (OWASP ZAP)"
+    runs-on: ubuntu-latest
+    needs: build
+    steps:
+      - uses: actions/download-artifact@v4
+        with:
+          name: docker-image
+      - name: Wczytaj obraz
+        run: docker load -i image.tar
+      - name: Tymczasowy deployment aplikacji (kontener)
+        run: |
+          docker network create zapnet
+          docker run -d --name juice --network zapnet -p 3000:3000 app:ci
+          echo "Czekam na gotowość aplikacji..."
+          for i in $(seq 1 50); do
+            if curl -sf http://localhost:3000/rest/admin/application-version >/dev/null 2>&1; then
+              echo "Aplikacja gotowa (próba $i)"; break; fi
+            sleep 4
+          done
+          curl -s http://localhost:3000/rest/admin/application-version || true
+      - name: OWASP ZAP Baseline Scan
+        run: |
+          docker run --rm --network zapnet -v "${{ github.workspace }}:/zap/wrk:rw" \
+            ghcr.io/zaproxy/zaproxy:stable zap-baseline.py \
+            -t http://juice:3000 -r zap-report.html -J zap-report.json -a -I || true
+          echo "## DAST — OWASP ZAP Baseline" >> "$GITHUB_STEP_SUMMARY"
+          node -e "try{const r=require('./zap-report.json');const al=r.site[0].alerts;const cnt={};al.forEach(a=>{cnt[a.riskdesc.split(' ')[0]]=(cnt[a.riskdesc.split(' ')[0]]||0)+1});console.log('Alerty wg ryzyka: '+JSON.stringify(cnt))}catch(e){console.log('raport zapisany')}" >> "$GITHUB_STEP_SUMMARY" || true
+      - name: Logi aplikacji (diagnostyka)
+        if: always()
+        run: docker logs juice 2>&1 | tail -30 || true
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: dast-zap
+          path: |
+            zap-report.html
+            zap-report.json
+
+  # ======================================================================
+  # ETAP 4 — Push obrazu do publicznego rejestru ghcr.io (po skanie Trivy)
+  # ======================================================================
+  push:
+    name: "Etap 4 — Push do ghcr.io"
+    runs-on: ubuntu-latest
+    needs: [ build, trivy ]
+    steps:
+      - uses: actions/download-artifact@v4
+        with:
+          name: docker-image
+      - name: Wczytaj obraz
+        run: docker load -i image.tar
+      - name: Logowanie do ghcr.io (token wbudowany)
+        uses: docker/login-action@v3
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+      - name: Tag i push
+        run: |
+          IMAGE_LC=$(echo "$IMAGE" | tr '[:upper:]' '[:lower:]')
+          docker tag app:ci "$IMAGE_LC:latest"
+          docker tag app:ci "$IMAGE_LC:${{ github.sha }}"
+          docker push "$IMAGE_LC:latest"
+          docker push "$IMAGE_LC:${{ github.sha }}"
+          echo "## Etap 4 — obraz opublikowany" >> "$GITHUB_STEP_SUMMARY"
+          echo "\`$IMAGE_LC:latest\`" >> "$GITHUB_STEP_SUMMARY"

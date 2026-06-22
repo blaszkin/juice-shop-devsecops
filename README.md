@@ -35,6 +35,13 @@ sprawozdaniu.
 
 Opublikowany obraz: `ghcr.io/blaszkin/juice-shop-devsecops:latest`
 
+## Weryfikacja
+
+- Repozytorium: <https://github.com/blaszkin/juice-shop-devsecops>
+- Przebiegi CI/CD (GitHub Actions): <https://github.com/blaszkin/juice-shop-devsecops/actions>
+- Publiczny obraz (ghcr.io): <https://github.com/blaszkin/juice-shop-devsecops/pkgs/container/juice-shop-devsecops>
+  — pobranie: `docker pull ghcr.io/blaszkin/juice-shop-devsecops:latest`
+
 ## Atrybucja
 
 Aplikacja bazowa: [OWASP Juice Shop](https://github.com/juice-shop/juice-shop) (licencja MIT,
